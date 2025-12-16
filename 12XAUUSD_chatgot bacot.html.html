@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8"/>
+<title>XAUUSD Ghost – HP Edition (Public Feed)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<script src="https://unpkg.com/lightweight-charts@4.1.1/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+html,body{margin:0;height:100%;background:#0b1220;color:#e5e7eb;font-family:Arial,Helvetica,sans-serif}
+#top{display:flex;gap:8px;align-items:center;padding:10px;background:#0f172a}
+input,select{background:#111827;color:#e5e7eb;border:1px solid #334155;padding:6px 10px;border-radius:6px}
+#status{margin-left:auto;font-weight:bold}
+#chart{height:calc(100% - 52px)}
+.badge{font-size:12px;opacity:.85}
+</style>
+</head>
+<body>
+<div id="top">
+  <b>XAUUSD Ghost – HP</b>
+  <span class="badge">M1 • Public Feed</span>
+  <input id="apikey" placeholder=d7d44b1453f0464f908c6e1ab4f1543f />
+  <button id="start">START</button>
+  <span id="status">IDLE</span>
+</div>
+<div id="chart"></div>
+
+<script>
+/* ===================== SETUP ===================== */
+const container = document.getElementById('chart');
+const statusEl  = document.getElementById('status');
+const apiInput  = document.getElementById('apikey');
+const startBtn  = document.getElementById('start');
+
+const chart = LightweightCharts.createChart(container,{
+  layout:{background:{color:'#0b1220'},textColor:'#e5e7eb'},
+  grid:{vertLines:{color:'#1f2937'},horzLines:{color:'#1f2937'}},
+  timeScale:{timeVisible:true,secondsVisible:false},
+  rightPriceScale:{borderColor:'#334155'}
+});
+const realSeries = chart.addCandlestickSeries({
+  upColor:'#22c55e',downColor:'#ef4444',
+  wickUpColor:'#22c55e',wickDownColor:'#ef4444',borderVisible:false
+});
+const ghostSeries = chart.addCandlestickSeries({
+  upColor:'rgba(148,163,184,.35)',downColor:'rgba(148,163,184,.35)',
+  wickVisible:true,borderVisible:false
+});
+const gzTop = chart.addLineSeries({color:'rgba(56,189,248,.7)',lineWidth:1});
+const gzBot = chart.addLineSeries({color:'rgba(56,189,248,.7)',lineWidth:1});
+
+/* ===================== STATE ===================== */
+let candles=[], ghosts=[], markers=[];
+let lastTime=0, timer=null;
+
+/* ===================== HELPERS ===================== */
+const TF_SEC = 60; // M1
+const body = c=>Math.abs(c.close-c.open);
+const range= c=>Math.max(c.high-c.low,1e-9);
+const bull = c=>c.close>c.open;
+const wUp  = c=>c.high - Math.max(c.open,c.close);
+const wDn  = c=>Math.min(c.open,c.close) - c.low;
+
+/* ===================== i / C / C++ (NON-REPAINT) ===================== */
+function classifyICpp(){
+  if(candles.length<3) return;
+  const i  = candles[candles.length-3];
+  const C  = candles[candles.length-2];
+  const Cp = candles[candles.length-1];
+
+  const i_ok  = body(i) > (wUp(i)+wDn(i))*0.6;
+  const C_ok  = (bull(C)===bull(i)) || body(C)<body(i);
+  const Cp_ok = (bull(Cp)===bull(i)) && body(Cp)>=body(C);
+
+  if(i_ok)  markers.push({time:i.time, position:'aboveBar', color:'#60a5fa', shape:'circle', text:'i'});
+  if(i_ok && C_ok)  markers.push({time:C.time, position:'aboveBar', color:'#f59e0b', shape:'circle', text:'C'});
+  if(i_ok && C_ok && Cp_ok) markers.push({time:Cp.time, position:'aboveBar', color:'#22c55e', shape:'circle', text:'C++'});
+  realSeries.setMarkers(markers);
+}
+
+/* ===================== GHOST (3 CANDLES, TIDAK HILANG) ===================== */
+function buildGhost(base){
+  const dir = bull(base);
+  const r   = range(base);
+  let last = base.close;
+  for(let i=1;i<=3;i++){
+    const o = last;
+    const c = o + (dir?1:-1)*(r*(0.35/i));
+    const h = Math.max(o,c)+r*0.25;
+    const l = Math.min(o,c)-r*0.25;
+    ghosts.push({time:base.time+TF_SEC*i,open:o,high:h,low:l,close:c});
+    last = c;
+  }
+  ghostSeries.setData(ghosts);
+  const mid = base.close;
+  gzTop.setData([{time:base.time,value:mid+r*0.6},{time:base.time+TF_SEC*3,value:mid+r*0.6}]);
+  gzBot.setData([{time:base.time,value:mid-r*0.6},{time:base.time+TF_SEC*3,value:mid-r*0.6}]);
+}
+
+/* ===================== DATA (PUBLIC FEED) ===================== */
+/*
+  Provider: TwelveData
+  Symbol: XAU/USD
+  Interval: 1min
+  Endpoint:
+  https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&outputsize=2&apikey=KEY
+*/
+async function fetchLast(){
+  const key = apiInput.value.trim();
+  if(!key) return null;
+  const url = `https://api.twelvedata.com/time_series?symbol=XAU/USD&interval=1min&outputsize=2&apikey=${key}`;
+  const r = await fetch(url);
+  const j = await r.json();
+  if(!j || !j.values || !j.values[1]) return null;
+
+  // ambil candle yang SUDAH CLOSE (values[1])
+  const v = j.values[1];
+  const t = Math.floor(new Date(v.datetime).getTime()/1000);
+  return { time:t, open:+v.open, high:+v.high, low:+v.low, close:+v.close };
+}
+
+/* ===================== LOOP ===================== */
+async function tick(){
+  try{
+    const c = await fetchLast();
+    if(!c || c.time===lastTime) return;
+    lastTime=c.time;
+    candles.push(c);
+    realSeries.update(c);
+    classifyICpp();
+    buildGhost(c);
+    statusEl.textContent='LIVE';
+  }catch(e){
+    statusEl.textContent='ERR';
+  }
+}
+
+/* ===================== START ===================== */
+startBtn.onclick=()=>{
+  candles=[]; ghosts=[]; markers=[];
+  realSeries.setData([]); ghostSeries.setData([]);
+  gzTop.setData([]); gzBot.setData([]); realSeries.setMarkers([]);
+  lastTime=0;
+  if(timer) clearInterval(timer);
+  statusEl.textContent='STARTING';
+  timer=setInterval(tick, 2000); // polling aman untuk HP
+};
+
+window.addEventListener('resize',()=>chart.resize(container.clientWidth,container.clientHeight));
+</script>
+</body>
+</html>
