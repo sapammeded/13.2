@@ -1,0 +1,197 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>13.2 — FULL FUSION (FINAL)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+<style>
+html,body{
+  margin:0;
+  padding:0;
+  height:100%;
+  background:#0b0f1a;
+  color:#dfe6f1;
+  font-family:Arial,Helvetica,sans-serif;
+}
+
+#top{
+  padding:10px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  align-items:center;
+  background:#0f1526;
+  border-bottom:1px solid #1f2a44;
+}
+
+.badge{
+  padding:6px 10px;
+  background:#121a2f;
+  border-radius:8px;
+  font-weight:bold;
+}
+
+select{
+  background:#121a2f;
+  color:#fff;
+  border:1px solid #1f2a44;
+  border-radius:8px;
+  padding:6px 10px;
+}
+
+#status{
+  margin-left:auto;
+  font-weight:bold;
+}
+
+#chart{
+  height:calc(100vh - 120px);
+}
+
+#log{
+  height:80px;
+  overflow:auto;
+  font-size:12px;
+  padding:6px;
+  border-top:1px solid #1f2a44;
+  background:#0f1526;
+}
+</style>
+</head>
+
+<body>
+
+<div id="top">
+  <div class="badge">13.2 — FULL FUSION (FINAL)</div>
+
+  <select id="pair">
+    <option value="btcusdt">BTCUSDT</option>
+    <option value="ethusdt">ETHUSDT</option>
+    <option value="bnbusdt">BNBUSDT</option>
+  </select>
+
+  <select id="tf">
+    <option value="1m">M1</option>
+    <option value="3m">M3</option>
+    <option value="5m">M5</option>
+    <option value="15m">M15</option>
+  </select>
+
+  <div id="status">INIT</div>
+</div>
+
+<div id="chart"></div>
+<div id="log"></div>
+
+<script src="https://unpkg.com/lightweight-charts/dist/lightweight-charts.standalone.production.js"></script>
+
+<script>
+const logBox = document.getElementById('log');
+const statusBox = document.getElementById('status');
+
+function log(msg){
+  logBox.innerHTML += msg + "<br>";
+  logBox.scrollTop = logBox.scrollHeight;
+}
+
+let chart, series, ghostSeries, ws;
+let lastClose = null;
+
+function setStatus(s){
+  statusBox.textContent = s;
+  statusBox.style.color = s === 'LIVE' ? '#00ff88' : '#ffaa00';
+}
+
+function initChart(){
+  chart = LightweightCharts.createChart(document.getElementById('chart'), {
+    layout:{background:{color:'#0b0f1a'},textColor:'#dfe6f1'},
+    grid:{vertLines:{color:'#1f2a44'},horzLines:{color:'#1f2a44'}},
+    timeScale:{timeVisible:true,secondsVisible:false}
+  });
+
+  series = chart.addCandlestickSeries({
+    upColor:'#00c853',
+    downColor:'#ff5252',
+    borderVisible:false,
+    wickUpColor:'#00c853',
+    wickDownColor:'#ff5252'
+  });
+
+  ghostSeries = chart.addCandlestickSeries({
+    upColor:'rgba(200,200,200,0.35)',
+    downColor:'rgba(200,200,200,0.35)',
+    borderVisible:false,
+    wickUpColor:'rgba(200,200,200,0.35)',
+    wickDownColor:'rgba(200,200,200,0.35)'
+  });
+}
+
+function startFeed(){
+  if(ws) ws.close();
+
+  const pair = document.getElementById('pair').value;
+  const tf   = document.getElementById('tf').value;
+
+  const url = `wss://stream.binance.com:9443/ws/${pair}@kline_${tf}`;
+  log("Connecting WS: " + url);
+
+  ws = new WebSocket(url);
+
+  ws.onopen = ()=>{
+    setStatus('LIVE');
+    log("WS CONNECTED");
+  };
+
+  ws.onmessage = e=>{
+    const d = JSON.parse(e.data);
+    if(!d.k || !d.k.x) return;
+
+    const k = d.k;
+    const candle = {
+      time: Math.floor(k.t/1000),
+      open: +k.o,
+      high: +k.h,
+      low: +k.l,
+      close: +k.c
+    };
+
+    series.update(candle);
+
+    // simple ghost projection
+    if(lastClose){
+      ghostSeries.update({
+        time: candle.time + 60,
+        open: lastClose,
+        high: lastClose + (candle.high-candle.low)/2,
+        low: lastClose - (candle.high-candle.low)/2,
+        close: candle.close
+      });
+    }
+
+    lastClose = candle.close;
+  };
+
+  ws.onerror = ()=>log("WS ERROR");
+  ws.onclose = ()=>log("WS CLOSED");
+}
+
+function restart(){
+  log("RESTART ENGINE");
+  setStatus('INIT');
+  chart.remove();
+  initChart();
+  startFeed();
+}
+
+document.getElementById('pair').onchange = restart;
+document.getElementById('tf').onchange   = restart;
+
+window.onload = ()=>{
+  initChart();
+  startFeed();
+};
+</script>
+
+</body>
+</html>
