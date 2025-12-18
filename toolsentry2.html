@@ -1,0 +1,239 @@
+
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Ghost Scalper Engine</title>
+
+<style>
+html,body{
+  margin:0;
+  background:#0b0f1a;
+  color:#ddd;
+  font-family:Arial;
+  overflow:hidden;
+}
+#top{
+  display:flex;
+  gap:8px;
+  padding:10px;
+  background:#111827;
+}
+select,button{
+  background:#0f172a;
+  color:#fff;
+  border:1px solid #1f2937;
+  border-radius:8px;
+  padding:8px 12px;
+}
+#start{background:#16a34a;border:none}
+#live{margin-left:auto;color:#22c55e;font-weight:bold}
+#time{
+  position:absolute;
+  top:64px;
+  left:50%;
+  transform:translateX(-50%);
+  background:#16a34a;
+  color:#fff;
+  padding:6px 14px;
+  border-radius:14px;
+  font-weight:bold;
+}
+#chart{
+  position:absolute;
+  top:60px;
+  bottom:120px;
+  left:0;
+  right:0;
+}
+canvas{width:100%;height:100%}
+#info{
+  position:absolute;
+  bottom:0;
+  left:0;
+  right:0;
+  background:#020617;
+  padding:10px;
+  font-size:13px;
+  border-top:1px solid #1f2937;
+}
+</style>
+</head>
+
+<body>
+
+<div id="top">
+  <select id="symbol">
+    <option value="btcusdt">BTCUSDT</option>
+    <option value="ethusdt">ETHUSDT</option>
+  </select>
+  <select id="tf">
+    <option value="1m">M1</option>
+    <option value="5m">M5</option>
+  </select>
+  <button id="start">START</button>
+  <div id="live">IDLE</div>
+</div>
+
+<div id="time">--:--:--</div>
+
+<div id="chart">
+  <canvas id="cv"></canvas>
+</div>
+
+<div id="info">
+TIME: <span id="it">-</span> |
+OPEN: <span id="io">-</span> |
+HIGH: <span id="ih">-</span> |
+LOW: <span id="il">-</span> |
+CLOSE: <span id="ic">-</span>
+</div>
+
+<!-- ===== JAVASCRIPT FINAL (SESUI YANG LU KASIH) ===== -->
+<script>
+const cv = document.getElementById("cv");
+const ctx = cv.getContext("2d");
+const symbol = document.getElementById("symbol");
+const tf = document.getElementById("tf");
+const startBtn = document.getElementById("start");
+const live = document.getElementById("live");
+const time = document.getElementById("time");
+const it = document.getElementById("it");
+const io = document.getElementById("io");
+const ih = document.getElementById("ih");
+const il = document.getElementById("il");
+const ic = document.getElementById("ic");
+
+let W, H, ws, candles = [], ghost = null, mission = null;
+
+function resize() {
+    W = cv.width = cv.offsetWidth;
+    H = cv.height = cv.offsetHeight;
+}
+window.onresize = resize;
+resize();
+
+function priceY(p, min, max) {
+    return H - (p - min) / (max - min) * H;
+}
+
+function draw() {
+    ctx.clearRect(0, 0, W, H);
+    if (candles.length < 5) return;
+
+    let hi = Math.max(...candles.map(c => c.h));
+    let lo = Math.min(...candles.map(c => c.l));
+    let pad = (hi - lo) * 0.15;
+    hi += pad;
+    lo -= pad;
+    let cw = W / candles.length;
+
+    let sup = Math.min(...candles.slice(-20).map(c => c.l));
+    let res = Math.max(...candles.slice(-20).map(c => c.h));
+
+    ctx.fillStyle = "rgba(34,197,94,0.08)";
+    ctx.fillRect(0, priceY(sup, lo, hi), W, priceY(lo, lo, hi) - priceY(sup, lo, hi));
+
+    ctx.fillStyle = "rgba(239,68,68,0.08)";
+    ctx.fillRect(0, priceY(res, lo, hi), W, priceY(res, lo, hi) - priceY(hi, lo, hi));
+
+    if (mission) {
+        ctx.strokeStyle = "#22d3ee";
+        ctx.setLineDash([6, 6]);
+        ctx.beginPath();
+        ctx.moveTo(0, priceY(mission, lo, hi));
+        ctx.lineTo(W, priceY(mission, lo, hi));
+        ctx.stroke();
+        ctx.setLineDash([]);
+    }
+
+    candles.forEach((c, i) => {
+        let x = i * cw + cw * 0.2;
+        let yH = priceY(c.h, lo, hi);
+        let yL = priceY(c.l, lo, hi);
+        let yO = priceY(c.o, lo, hi);
+        let yC = priceY(c.c, lo, hi);
+
+        ctx.strokeStyle = "#aaa";
+        ctx.beginPath();
+        ctx.moveTo(x + cw * 0.3, yH);
+        ctx.lineTo(x + cw * 0.3, yL);
+        ctx.stroke();
+
+        ctx.fillStyle = c.c >= c.o ? "#22c55e" : "#ef4444";
+        ctx.fillRect(x, Math.min(yO, yC), cw * 0.6, Math.abs(yO - yC) || 1);
+    });
+
+    if (ghost) {
+        let gx = (candles.length) * cw + cw * 0.2;
+        ctx.strokeStyle = "#facc15";
+        ctx.beginPath();
+        ctx.moveTo(gx + cw * 0.3, priceY(ghost.h, lo, hi));
+        ctx.lineTo(gx + cw * 0.3, priceY(ghost.l, lo, hi));
+        ctx.stroke();
+        ctx.fillStyle = "rgba(250,204,21,0.4)";
+        ctx.fillRect(
+            gx,
+            priceY(Math.max(ghost.o, ghost.c), lo, hi),
+            cw * 0.6,
+            Math.abs(priceY(ghost.o, lo, hi) - priceY(ghost.c, lo, hi)) || 1
+        );
+    }
+}
+
+cv.onclick = e => {
+    let i = Math.floor(e.offsetX / (W / candles.length));
+    let c = candles[i];
+    if (!c) return;
+    it.textContent = new Date(c.t).toLocaleTimeString();
+    io.textContent = c.o;
+    ih.textContent = c.h;
+    il.textContent = c.l;
+    ic.textContent = c.c;
+};
+
+function computeGhost() {
+    let last = candles.at(-1);
+    let range = (last.h - last.l);
+    ghost = {
+        o: last.c,
+        h: last.c + range * 0.7,
+        l: last.c - range * 0.3,
+        c: last.c + range * 0.4
+    };
+}
+
+function computeMission() {
+    let highs = candles.slice(-30).map(c => c.h);
+    mission = Math.max(...highs);
+}
+
+function start() {
+    if (ws) ws.close();
+    candles = [];
+    ghost = null;
+    mission = null;
+    let s = symbol.value;
+    let interval = tf.value;
+    ws = new WebSocket(`wss://stream.binance.com:9443/ws/${s}@kline_${interval}`);
+    live.textContent = "LIVE";
+
+    ws.onmessage = e => {
+        let k = JSON.parse(e.data).k;
+        let c = { t:k.t, o:+k.o, h:+k.h, l:+k.l, c:+k.c };
+        if (candles.length && candles.at(-1).t === c.t) candles[candles.length - 1] = c;
+        else candles.push(c);
+        if (candles.length > 80) candles.shift();
+        time.textContent = new Date(c.t).toLocaleTimeString();
+        computeGhost();
+        computeMission();
+        draw();
+    };
+}
+
+startBtn.onclick = start;
+</script>
+
+</body>
+</html>
