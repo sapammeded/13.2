@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SCALPING ENGINE – LIVE</title>
+<style>
+body{margin:0;background:#0b1220;color:#9fd3ff;font-family:Arial}
+#top{display:flex;gap:8px;padding:10px;background:#0f1a2b;align-items:center}
+select,button{background:#121f33;color:#fff;border:1px solid #1f3555;padding:6px 10px;border-radius:6px}
+#status{margin-left:auto;color:#2ecc71;font-weight:bold}
+#wrap{position:relative}
+canvas{display:block;background:#0b1220}
+#info{
+ position:absolute;bottom:10px;left:10px;
+ background:rgba(0,0,0,.75);
+ padding:8px;border-radius:6px;font-size:12px
+}
+</style>
+</head>
+
+<body>
+
+<div id="top">
+  <select><option>BTCUSDT</option></select>
+  <select><option>M1</option></select>
+  <button id="start">START</button>
+  <div id="status">LIVE</div>
+</div>
+
+<div id="wrap">
+  <canvas id="chart" width="420" height="620"></canvas>
+  <div id="info">TIME:-<br>OPEN:-<br>HIGH:-<br>LOW:-<br>CLOSE:-</div>
+</div>
+
+<script>
+const cvs=document.getElementById("chart");
+const ctx=cvs.getContext("2d");
+const info=document.getElementById("info");
+let candles=[], ws=null;
+
+function draw(){
+ ctx.clearRect(0,0,cvs.width,cvs.height);
+ if(candles.length<5)return;
+
+ let highs=candles.map(c=>c.h), lows=candles.map(c=>c.l);
+ let max=Math.max(...highs), min=Math.min(...lows);
+ let pad=40, h=cvs.height-pad*2, w=cvs.width;
+ let cw=w/candles.length;
+
+ // === GHOST ZONE (support & resistance) ===
+ let sup=Math.min(...lows.slice(0,15));
+ let res=Math.max(...highs.slice(0,15));
+ let ySup=pad+(max-sup)/(max-min)*h;
+ let yRes=pad+(max-res)/(max-min)*h;
+
+ ctx.fillStyle="rgba(46,204,113,0.12)";
+ ctx.fillRect(0,ySup, w, cvs.height);
+ ctx.fillStyle="rgba(231,76,60,0.12)";
+ ctx.fillRect(0,0,w,yRes);
+
+ // === DRAW CANDLES ===
+ candles.forEach((c,i)=>{
+   let x=i*cw+cw/2;
+   let yH=pad+(max-c.h)/(max-min)*h;
+   let yL=pad+(max-c.l)/(max-min)*h;
+   let yO=pad+(max-c.o)/(max-min)*h;
+   let yC=pad+(max-c.c)/(max-min)*h;
+
+   ctx.strokeStyle="#aaa";
+   ctx.beginPath();ctx.moveTo(x,yH);ctx.lineTo(x,yL);ctx.stroke();
+
+   ctx.fillStyle=c.c>=c.o?"#2ecc71":"#e74c3c";
+   ctx.fillRect(x-cw*0.25,Math.min(yO,yC),cw*0.5,Math.abs(yO-yC)||1);
+ });
+
+ // === MISSION PRICE ===
+ let last=candles[candles.length-1];
+ let prev=candles[candles.length-2];
+ let mission= last.c>prev.c ? last.h+(last.h-last.l) : last.l-(last.h-last.l);
+ let yM=pad+(max-mission)/(max-min)*h;
+
+ ctx.setLineDash([6,6]);
+ ctx.strokeStyle="#00ffcc";
+ ctx.beginPath();ctx.moveTo(0,yM);ctx.lineTo(w,yM);ctx.stroke();
+ ctx.setLineDash([]);
+ ctx.fillStyle="#00ffcc";
+ ctx.fillText("MISSION "+mission.toFixed(2),5,yM-4);
+
+ // === GHOST CANDLE (proyeksi) ===
+ let gx=w-cw/2;
+ let go=last.c;
+ let gc=mission;
+ let gh=Math.max(go,gc);
+ let gl=Math.min(go,gc);
+
+ let yGO=pad+(max-go)/(max-min)*h;
+ let yGC=pad+(max-gc)/(max-min)*h;
+ let yGH=pad+(max-gh)/(max-min)*h;
+ let yGL=pad+(max-gl)/(max-min)*h;
+
+ ctx.globalAlpha=0.35;
+ ctx.strokeStyle="#fff";
+ ctx.beginPath();ctx.moveTo(gx,yGH);ctx.lineTo(gx,yGL);ctx.stroke();
+ ctx.fillStyle=gc>=go?"#2ecc71":"#e74c3c";
+ ctx.fillRect(gx-cw*0.25,Math.min(yGO,yGC),cw*0.5,Math.abs(yGO-yGC)||1);
+ ctx.globalAlpha=1;
+
+ // === TIMESTAMP ===
+ ctx.fillStyle="#6fa8ff";
+ candles.forEach((c,i)=>{
+   if(i%10===0){
+     let t=new Date(c.t).toLocaleTimeString().slice(0,5);
+     ctx.fillText(t,i*cw+2,cvs.height-10);
+   }
+ });
+}
+
+cvs.onclick=e=>{
+ let i=Math.floor(e.offsetX/(cvs.width/candles.length));
+ let c=candles[i]; if(!c)return;
+ info.innerHTML=`TIME:${new Date(c.t).toLocaleTimeString()}<br>
+ OPEN:${c.o}<br>HIGH:${c.h}<br>LOW:${c.l}<br>CLOSE:${c.c}`;
+};
+
+document.getElementById("start").onclick=()=>{
+ if(ws)ws.close(); candles=[];
+ ws=new WebSocket("wss://stream.binance.com:9443/ws/btcusdt@kline_1m");
+ ws.onmessage=ev=>{
+   let k=JSON.parse(ev.data).k;
+   let c={t:k.t,o:+k.o,h:+k.h,l:+k.l,c:+k.c};
+   if(candles.length && candles[candles.length-1].t===c.t)
+     candles[candles.length-1]=c;
+   else{candles.push(c); if(candles.length>60)candles.shift();}
+   draw();
+ };
+};
+</script>
+</body>
+</html>
