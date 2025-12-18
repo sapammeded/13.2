@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>GHOST LIVE – REAL MARKET ENGINE</title>
+
+<style>
+html,body{
+  margin:0;
+  padding:0;
+  background:#0b0f1a;
+  color:#e5e7eb;
+  font-family:system-ui,-apple-system,Segoe UI,Roboto;
+  overflow:hidden;
+}
+#topbar{
+  display:flex;
+  gap:8px;
+  padding:10px;
+  background:#0f172a;
+  align-items:center;
+}
+select,button{
+  background:#020617;
+  color:#e5e7eb;
+  border:1px solid #1e293b;
+  padding:6px 10px;
+  border-radius:6px;
+}
+button{cursor:pointer}
+#status{
+  margin-left:auto;
+  font-weight:bold;
+  color:#22c55e;
+}
+#chartWrap{
+  position:relative;
+  width:100%;
+  height:calc(100vh - 56px);
+  touch-action:none;
+}
+canvas{
+  width:100%;
+  height:100%;
+}
+#clock{
+  position:absolute;
+  top:10px;
+  left:10px;
+  background:#16a34a;
+  color:#fff;
+  padding:4px 8px;
+  border-radius:6px;
+  font-weight:bold;
+  font-size:13px;
+}
+</style>
+</head>
+
+<body>
+
+<div id="topbar">
+  <select id="symbol">
+    <option value="btcusdt">BTCUSDT</option>
+    <option value="ethusdt">ETHUSDT</option>
+  </select>
+  <select id="tf">
+    <option value="1m">M1</option>
+    <option value="5m">M5</option>
+  </select>
+  <button id="start">START</button>
+  <div id="status">LIVE</div>
+</div>
+
+<div id="chartWrap">
+  <div id="clock"></div>
+  <canvas id="chart"></canvas>
+</div>
+
+<script>
+/* ================= CORE STATE ================= */
+const canvas = document.getElementById('chart');
+const ctx = canvas.getContext('2d');
+
+let candles = [];
+let ticks = [];
+let ws = null;
+let scaleX = 6;
+let offsetX = 0;
+
+function resize(){
+  canvas.width = canvas.clientWidth * devicePixelRatio;
+  canvas.height = canvas.clientHeight * devicePixelRatio;
+}
+window.addEventListener('resize',resize);
+resize();
+
+/* ================= TIME ================= */
+setInterval(()=>{
+  const d=new Date();
+  document.getElementById('clock').innerText =
+    d.toLocaleTimeString();
+},500);
+
+/* ================= DATA ================= */
+function connectWS(symbol){
+  if(ws) ws.close();
+  ws = new WebSocket(
+    `wss://stream.binance.com:9443/ws/${symbol}@trade`
+  );
+  ws.onmessage = e=>{
+    const t = JSON.parse(e.data);
+    ticks.push({price:+t.p,time:t.T});
+    if(ticks.length>500) ticks.shift();
+    buildCandle();
+  };
+}
+
+function buildCandle(){
+  const tf = document.getElementById('tf').value;
+  const tfMs = tf==="1m"?60000:300000;
+  const lastTick = ticks[ticks.length-1];
+  if(!lastTick) return;
+
+  let c = candles[candles.length-1];
+  if(!c || lastTick.time >= c.time + tfMs){
+    candles.push({
+      time: Math.floor(lastTick.time/tfMs)*tfMs,
+      open:lastTick.price,
+      high:lastTick.price,
+      low:lastTick.price,
+      close:lastTick.price
+    });
+    if(candles.length>200) candles.shift();
+  }else{
+    c.high = Math.max(c.high,lastTick.price);
+    c.low  = Math.min(c.low ,lastTick.price);
+    c.close= lastTick.price;
+  }
+}
+
+/* ================= GHOST LOGIC ================= */
+function ghostProjection(){
+  if(candles.length<5) return null;
+  const last = candles[candles.length-1];
+  const prev = candles.slice(-5,-1);
+
+  let up=0,down=0;
+  prev.forEach(c=>{
+    if(c.close>c.open) up++;
+    else down++;
+  });
+
+  let dir = up>down ? 1 : -1;
+  let body = Math.abs(last.close-last.open)||1;
+  return {
+    open:last.close,
+    close:last.close + dir*body,
+    high:last.close + dir*body*1.4,
+    low:last.close - dir*body*0.4
+  };
+}
+
+function ghostZones(){
+  let zones=[];
+  for(let i=2;i<candles.length-2;i++){
+    let c=candles[i];
+    if(c.low<candles[i-1].low && c.low<candles[i+1].low){
+      zones.push({y:c.low,type:'demand'});
+    }
+    if(c.high>candles[i-1].high && c.high>candles[i+1].high){
+      zones.push({y:c.high,type:'supply'});
+    }
+  }
+  return zones.slice(-6);
+}
+
+/* ================= DRAW ================= */
+function draw(){
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  ctx.save();
+  ctx.scale(devicePixelRatio,devicePixelRatio);
+
+  if(candles.length<2){ctx.restore();return;}
+
+  let prices=candles.flatMap(c=>[c.high,c.low]);
+  let min=Math.min(...prices);
+  let max=Math.max(...prices);
+  let h=canvas.clientHeight;
+  let w=canvas.clientWidth;
+
+  function py(p){
+    return h-(p-min)/(max-min)*h;
+  }
+
+  /* zones */
+  ghostZones().forEach(z=>{
+    ctx.setLineDash([4,4]);
+    ctx.strokeStyle = z.type==='demand'?'#22c55e':'#ef4444';
+    ctx.beginPath();
+    ctx.moveTo(0,py(z.y));
+    ctx.lineTo(w,py(z.y));
+    ctx.stroke();
+  });
+  ctx.setLineDash([]);
+
+  /* candles */
+  candles.forEach((c,i)=>{
+    let x = i*scaleX - offsetX;
+    if(x<-10||x>w+10) return;
+    let col = c.close>=c.open?'#22c55e':'#ef4444';
+    ctx.strokeStyle=col;
+    ctx.fillStyle=col;
+    ctx.beginPath();
+    ctx.moveTo(x,py(c.high));
+    ctx.lineTo(x,py(c.low));
+    ctx.stroke();
+    let y=Math.min(py(c.open),py(c.close));
+    let bh=Math.abs(py(c.open)-py(c.close));
+    ctx.fillRect(x-2,y,4,Math.max(1,bh));
+  });
+
+  /* ghost candle */
+  const g = ghostProjection();
+  if(g){
+    let x = candles.length*scaleX - offsetX;
+    ctx.globalAlpha=0.4;
+    ctx.strokeStyle='#38bdf8';
+    ctx.fillStyle='#38bdf8';
+    ctx.beginPath();
+    ctx.moveTo(x,py(g.high));
+    ctx.lineTo(x,py(g.low));
+    ctx.stroke();
+    ctx.fillRect(
+      x-2,
+      Math.min(py(g.open),py(g.close)),
+      4,
+      Math.abs(py(g.open)-py(g.close))
+    );
+    ctx.globalAlpha=1;
+  }
+
+  ctx.restore();
+  requestAnimationFrame(draw);
+}
+draw();
+
+/* ================= CONTROL ================= */
+document.getElementById('start').onclick=()=>{
+  candles=[];
+  ticks=[];
+  connectWS(document.getElementById('symbol').value);
+};
+
+canvas.addEventListener('wheel',e=>{
+  scaleX+=e.deltaY>0?-1:1;
+  scaleX=Math.max(3,Math.min(20,scaleX));
+});
+
+canvas.addEventListener('touchmove',e=>{
+  if(e.touches.length===1){
+    offsetX+=e.touches[0].movementX||0;
+  }
+});
+</script>
+
+</body>
+</html>
